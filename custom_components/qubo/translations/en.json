@@ -1,0 +1,27 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Qubo Login",
+        "description": "Enter your Qubo account credentials.",
+        "data": {
+          "username": "Email / Phone",
+          "password": "Password"
+        }
+      },
+      "device": {
+        "title": "Select Device",
+        "description": "Choose which Qubo device to set up.",
+        "data": {
+          "device_uuid": "Device"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Qubo. Check your internet.",
+      "invalid_auth": "Invalid credentials. Check your email and password.",
+      "no_devices": "No Qubo devices found in your account.",
+      "unknown": "Unexpected error occurred."
+    }
+  }
+}
