@@ -36,7 +36,7 @@ CAMERA_MODELS = (
 # Platform lists per device type
 PLATFORMS_BULB = ["light", "sensor", "binary_sensor", "number", "select"]
 PLATFORMS_PLUG = ["switch", "sensor", "binary_sensor", "button"]
-PLATFORMS_CAMERA = ["camera", "sensor", "binary_sensor"]
+PLATFORMS_CAMERA = ["camera", "switch", "select", "number", "button", "sensor", "binary_sensor"]
 
 # Qubo color temperature range: CT 0=warm, 100=cool
 # Mapped to HA kelvin: 0→2000K, 100→6535K

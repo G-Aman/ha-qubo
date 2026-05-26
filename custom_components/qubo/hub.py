@@ -102,6 +102,21 @@ class QuboHub:
             "duration": None,
         }
 
+        # Camera state
+        self.camera_motion_tracking: bool = False
+        self.camera_continuous_recording: bool = False
+        self.camera_image_analytics: bool = False
+        self.camera_night_mode: str = "auto"
+        self.camera_motion_sensitivity: str = "HIGH_SENSITIVITY"
+        self.camera_volume: int = 50
+        self.camera_ptz_position: str = ""
+        self.camera_cloud_dvr: bool = False
+        self.camera_sd_info: dict[str, str | None] = {
+            "total": None,
+            "available": None,
+            "status": None,
+        }
+
         # WiFi info (all devices)
         self.wifi_info: dict[str, str | None] = {
             "ssid": None,
@@ -169,11 +184,25 @@ class QuboHub:
             ]
             if self.is_plug:
                 topics.append((self._topic_monitor_meter, 0))
-            else:
+            elif self.is_bulb:
                 topics.extend([
                     (f"/monitor/{unit}/{dev}/colorModeControl", 0),
                     (f"/monitor/{unit}/{dev}/colorRGBControl", 0),
                     (f"/monitor/{unit}/{dev}/colorWarmthControl", 0),
+                ])
+            elif self.is_camera:
+                topics.extend([
+                    (f"/monitor/{unit}/{dev}/motionTracking", 0),
+                    (f"/monitor/{unit}/{dev}/continuousRecording", 0),
+                    (f"/monitor/{unit}/{dev}/imageAnalytics", 0),
+                    (f"/monitor/{unit}/{dev}/nightModeControl", 0),
+                    (f"/monitor/{unit}/{dev}/recordingConfig", 0),
+                    (f"/monitor/{unit}/{dev}/volumeControl", 0),
+                    (f"/monitor/{unit}/{dev}/panTiltControl", 0),
+                    (f"/monitor/{unit}/{dev}/panTiltPreset", 0),
+                    (f"/monitor/{unit}/{dev}/sdCardInfo", 0),
+                    (f"/monitor/{unit}/{dev}/cloudDvrControl", 0),
+                    (f"/monitor/{unit}/{dev}/streamControl", 0),
                 ])
             client.subscribe(topics)
             _LOGGER.debug("MQTT connected and subscribed for %s", self.device_name)
@@ -197,13 +226,15 @@ class QuboHub:
             elif topic.endswith("/heartbeat"):
                 self.online = True
                 self.hass.loop.call_soon_threadsafe(self._publish_update)
-            elif not self.is_plug:
+            elif self.is_bulb:
                 if topic.endswith("/colorModeControl"):
                     self._handle_color_mode_update(payload)
                 elif topic.endswith("/colorRGBControl"):
                     self._handle_rgb_update(payload)
                 elif topic.endswith("/colorWarmthControl"):
                     self._handle_warmth_update(payload)
+            elif self.is_camera:
+                self._handle_camera_update(topic, payload)
 
         except (json.JSONDecodeError, ValueError, KeyError, TypeError) as err:
             _LOGGER.debug("Error parsing MQTT message: %s", err)
@@ -342,6 +373,94 @@ class QuboHub:
         elif len(parts) >= 6:
             ct = int(parts[5])
             self.color_temp_kelvin = _qubo_ct_to_kelvin(ct)
+
+    def _handle_camera_update(self, topic: str, payload: dict) -> None:
+        """Parse camera MQTT messages and update state."""
+        svc_data = (
+            payload.get("devices", {})
+            .get("services", {})
+        )
+        # Extract the service name from topic
+        svc_name = topic.rsplit("/", 1)[-1] if "/" in topic else ""
+        state = svc_data.get(svc_name, {}).get("events", {}).get("stateChanged", {})
+        if not state:
+            return
+
+        if svc_name == "motionTracking":
+            self.camera_motion_tracking = str(state.get("enabled", "")).lower() == "true"
+        elif svc_name == "continuousRecording":
+            self.camera_continuous_recording = str(state.get("enabled", "")).lower() == "true"
+        elif svc_name == "imageAnalytics":
+            self.camera_image_analytics = str(state.get("state", "")).lower() == "enable"
+        elif svc_name == "nightModeControl":
+            self.camera_night_mode = state.get("nightModeView", state.get("nightMode", self.camera_night_mode))
+        elif svc_name == "recordingConfig":
+            self.camera_motion_sensitivity = state.get("motionSensitivity", self.camera_motion_sensitivity)
+        elif svc_name == "volumeControl":
+            try:
+                self.camera_volume = int(state.get("level", self.camera_volume))
+            except (ValueError, TypeError):
+                pass
+        elif svc_name == "panTiltControl":
+            self.camera_ptz_position = state.get("horizontalVerticalPostion", self.camera_ptz_position)
+        elif svc_name == "cloudDvrControl":
+            self.camera_cloud_dvr = str(state.get("state", "")).lower() == "enable"
+        elif svc_name == "sdCardInfo":
+            if "totalStorage" in state:
+                self.camera_sd_info["total"] = state["totalStorage"]
+            if "availableStorage" in state:
+                self.camera_sd_info["available"] = state["availableStorage"]
+            if "status" in state:
+                self.camera_sd_info["status"] = state["status"]
+
+        self.hass.loop.call_soon_threadsafe(self._publish_update)
+
+    # ── Camera control methods ─────────────────────────────────────
+
+    async def camera_set_motion_tracking(self, enabled: bool) -> None:
+        """Enable/disable motion tracking."""
+        await self._async_refresh_token_if_needed()
+        self._publish_service("motionTracking", {"enabled": str(enabled).lower()})
+
+    async def camera_set_continuous_recording(self, enabled: bool) -> None:
+        """Enable/disable continuous recording."""
+        await self._async_refresh_token_if_needed()
+        self._publish_service("continuousRecording", {"enabled": str(enabled).lower()})
+
+    async def camera_set_image_analytics(self, enabled: bool) -> None:
+        """Enable/disable AI image analytics."""
+        await self._async_refresh_token_if_needed()
+        self._publish_service("imageAnalytics", {"state": "enable" if enabled else "disable"})
+
+    async def camera_set_night_mode(self, mode: str) -> None:
+        """Set night mode: 'auto', 'on', 'off'."""
+        await self._async_refresh_token_if_needed()
+        self._publish_service("nightModeControl", {"nightModeView": mode})
+
+    async def camera_set_motion_sensitivity(self, level: str) -> None:
+        """Set motion sensitivity: HIGH_SENSITIVITY, MEDIUM_SENSITIVITY, LOW_SENSITIVITY."""
+        await self._async_refresh_token_if_needed()
+        self._publish_service("recordingConfig", {"motionSensitivity": level})
+
+    async def camera_set_volume(self, level: int) -> None:
+        """Set camera volume 0-100."""
+        await self._async_refresh_token_if_needed()
+        self._publish_service("volumeControl", {"level": str(level)})
+
+    async def camera_ptz_move(self, h: int, v: int) -> None:
+        """Move PTZ. h: -100 to 100 (left/right), v: -100 to 100 (up/down)."""
+        await self._async_refresh_token_if_needed()
+        self._publish_service("panTiltControl", {"horizontalVerticalPostion": f"{h},{v}"})
+
+    async def camera_set_cloud_dvr(self, enabled: bool) -> None:
+        """Enable/disable cloud DVR."""
+        await self._async_refresh_token_if_needed()
+        self._publish_service("cloudDvrControl", {"state": "enable" if enabled else "disable"})
+
+    async def camera_reboot(self) -> None:
+        """Reboot the camera."""
+        await self._async_refresh_token_if_needed()
+        self._publish_service("deviceReboot", {"reboot": "true"})
 
     # ── MQTT connection lifecycle ────────────────────────────────────
 

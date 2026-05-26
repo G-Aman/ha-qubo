@@ -5,7 +5,8 @@ import logging
 import time
 from datetime import timedelta
 
-from homeassistant.components.camera import Camera
+from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.stream import StreamType
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -63,6 +64,9 @@ async def async_setup_entry(
 class QuboCamera(Camera):
     """Representation of a Qubo camera."""
 
+    _attr_has_entity_name = True
+    _attr_name = None
+
     def __init__(
         self,
         hass: HomeAssistant,
@@ -80,13 +84,11 @@ class QuboCamera(Camera):
         self._session_id: str | None = None
         self._stream_expires_at: float = 0
 
-        # Camera attributes
-        self._attr_name = hub.device_name
-        self._attr_unique_id = f"qubo_camera_{hub.device_uuid}"
-        self._attr_is_streaming = False
-        self._attr_is_recording = False
+        # Tell HA this camera supports HLS streaming
+        self._attr_frontend_stream_type = StreamType.HLS
+        self._attr_supported_features = CameraEntityFeature.STREAM
 
-        # Snapshot
+        # Snapshot cache
         self._last_snapshot: bytes | None = None
 
         # Stream refresh timer
@@ -105,17 +107,17 @@ class QuboCamera(Camera):
     @property
     def unique_id(self) -> str:
         """Return unique ID."""
-        return self._attr_unique_id
+        return f"qubo_camera_{self._hub.device_uuid}"
 
     @property
     def is_recording(self) -> bool:
         """Return true if the device is recording."""
-        return self._attr_is_recording
+        return self._hub.camera_continuous_recording
 
     @property
     def is_streaming(self) -> bool:
         """Return true if the device is streaming."""
-        return self._attr_is_streaming
+        return self._stream_url is not None and time.time() < self._stream_expires_at
 
     @property
     def brand(self) -> str:
@@ -176,9 +178,11 @@ class QuboCamera(Camera):
         self._stream_expires_at = time.time() + 25 * 60  # 25 min TTL
 
         _LOGGER.debug(
-            "Qubo camera stream URL obtained: session=%s",
+            "Qubo camera stream URL obtained: session=%s url=%s",
             self._session_id,
+            self._stream_url,
         )
+        self.async_write_ha_state()
         return self._stream_url  # type: ignore[return-value]
 
     async def _async_stop_stream(self) -> None:
@@ -223,9 +227,15 @@ class QuboCamera(Camera):
         finally:
             self._session_id = None
             self._stream_url = None
+            self._stream_expires_at = 0
+            self.async_write_ha_state()
 
     async def stream_source(self) -> str | None:
-        """Return the stream source URL (RTSPS)."""
+        """Return the stream source URL (RTSPS).
+
+        HA's stream integration takes this URL and transcodes it to HLS
+        for the frontend player.
+        """
         if self._stream_url and time.time() < self._stream_expires_at:
             return self._stream_url
 
@@ -238,10 +248,14 @@ class QuboCamera(Camera):
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """Return a camera image (snapshot)."""
+        """Return a camera image (snapshot).
+
+        Uses ffmpeg to grab a single frame from the RTSPS stream.
+        Falls back to cached snapshot if ffmpeg is unavailable.
+        """
         stream_url = await self.stream_source()
         if not stream_url:
-            return None
+            return self._last_snapshot
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -275,18 +289,22 @@ class QuboCamera(Camera):
 
     async def async_turn_on(self) -> None:
         """Turn on the camera stream."""
-        self._attr_is_streaming = True
-        self.async_write_ha_state()
+        try:
+            await self._async_get_stream_url()
+        except Exception as err:
+            _LOGGER.warning("Failed to start Qubo camera stream: %s", err)
 
     async def async_turn_off(self) -> None:
         """Turn off the camera stream."""
-        self._attr_is_streaming = False
         await self._async_stop_stream()
-        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Run when entity is added to hass."""
-        self._attr_is_streaming = True
+        # Eagerly fetch the stream URL so it's ready when the frontend asks
+        try:
+            await self._async_get_stream_url()
+        except Exception as err:
+            _LOGGER.debug("Initial stream fetch failed (will retry on demand): %s", err)
 
         # Refresh stream URL every 20 minutes (before 25-min TTL)
         self._unsub_stream_refresh = async_track_time_interval(
@@ -297,9 +315,6 @@ class QuboCamera(Camera):
 
     async def _refresh_stream(self, now=None) -> None:
         """Periodically refresh the stream URL."""
-        if not self._attr_is_streaming:
-            return
-
         try:
             await self._async_stop_stream()
             await self._async_get_stream_url()
