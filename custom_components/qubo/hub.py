@@ -200,7 +200,7 @@ class QuboHub:
                     (f"/monitor/{unit}/{dev}/volumeControl", 0),
                     (f"/monitor/{unit}/{dev}/panTiltControl", 0),
                     (f"/monitor/{unit}/{dev}/panTiltPreset", 0),
-                    (f"/monitor/{unit}/{dev}/sdCardInfo", 0),
+                    (f"/monitor/{unit}/{dev}/systemDiagnosis", 0),
                     (f"/monitor/{unit}/{dev}/cloudDvrControl", 0),
                     (f"/monitor/{unit}/{dev}/streamControl", 0),
                 ])
@@ -405,13 +405,16 @@ class QuboHub:
             self.camera_ptz_position = state.get("horizontalVerticalPostion", self.camera_ptz_position)
         elif svc_name == "cloudDvrControl":
             self.camera_cloud_dvr = str(state.get("state", "")).lower() == "enable"
-        elif svc_name == "sdCardInfo":
-            if "totalStorage" in state:
-                self.camera_sd_info["total"] = state["totalStorage"]
-            if "availableStorage" in state:
-                self.camera_sd_info["available"] = state["availableStorage"]
-            if "status" in state:
-                self.camera_sd_info["status"] = state["status"]
+        elif svc_name == "systemDiagnosis":
+            if "totalExternalStorage" in state:
+                self.camera_sd_info["total"] = state["totalExternalStorage"]
+            if "availableExternalStorage" in state:
+                self.camera_sd_info["available"] = state["availableExternalStorage"]
+            if "SdCardAvailability" in state:
+                self.camera_sd_info["status"] = state["SdCardAvailability"]
+            if "sdCardStatus" in state:
+                # Append detailed card health if available (e.g. statusOK, noSpaceAvailable)
+                self.camera_sd_info["sdcard_status"] = state["sdCardStatus"]
 
         self.hass.loop.call_soon_threadsafe(self._publish_update)
 
@@ -452,6 +455,16 @@ class QuboHub:
         await self._async_refresh_token_if_needed()
         self._publish_service("panTiltControl", {"horizontalVerticalPostion": f"{h},{v}"})
 
+    async def camera_ptz_start_pan(self, direction: str) -> None:
+        """Start continuous PTZ movement. direction: UP, DOWN, LEFT, RIGHT."""
+        await self._async_refresh_token_if_needed()
+        self._publish_command("panTiltControl", "startPan", {"direction": direction})
+
+    async def camera_ptz_stop_pan(self) -> None:
+        """Stop continuous PTZ movement."""
+        await self._async_refresh_token_if_needed()
+        self._publish_command("panTiltControl", "stopPan")
+
     async def camera_set_cloud_dvr(self, enabled: bool) -> None:
         """Enable/disable cloud DVR."""
         await self._async_refresh_token_if_needed()
@@ -461,6 +474,28 @@ class QuboHub:
         """Reboot the camera."""
         await self._async_refresh_token_if_needed()
         self._publish_service("deviceReboot", {"reboot": "true"})
+
+    async def _send_sdcard_refresh(self, now=None) -> None:
+        """Request SD card storage status from a camera (systemDiagnosis)."""
+        await self._async_refresh_token_if_needed()
+        topic = f"/control/{self._unit_uuid}/{self.device_uuid}/systemDiagnosis"
+        payload = {
+            "devices": {
+                "deviceUUID": self.device_uuid,
+                "services": {
+                    "systemDiagnosis": {
+                        "commands": {
+                            "getExternalStorageStatus": {
+                                "instanceId": "0",
+                                "parameters": {},
+                            }
+                        }
+                    }
+                },
+            },
+        }
+        self._mqtt_client.publish(topic, json.dumps(payload))
+        _LOGGER.debug("Sent getExternalStorageStatus for %s", self.device_name)
 
     # ── MQTT connection lifecycle ────────────────────────────────────
 
@@ -477,6 +512,12 @@ class QuboHub:
             await self._send_meter_refresh()
             self._unsub_refresh = async_track_time_interval(
                 self.hass, self._send_meter_refresh, timedelta(seconds=60)
+            )
+
+        if self.is_camera:
+            await self._send_sdcard_refresh()
+            self._unsub_refresh = async_track_time_interval(
+                self.hass, self._send_sdcard_refresh, timedelta(seconds=60)
             )
 
     async def stop(self) -> None:
@@ -520,6 +561,7 @@ class QuboHub:
                 data = await response.json()
 
                 self._access_token = data.get("accessToken", self._access_token)
+                self._refresh_token = data.get("refreshToken", self._refresh_token)
                 expires_in = data.get("expires_in", 3600)
                 self._expires_at = time.time() + expires_in - 60
 
@@ -571,6 +613,33 @@ class QuboHub:
         topic = f"/control/{self._unit_uuid}/{self.device_uuid}/{service}"
         payload = self._build_command(service, attributes)
         self._mqtt_client.publish(topic, payload)
+
+    def _publish_command(self, service: str, command_name: str, parameters: dict = None) -> None:
+        """Publish a commands-based (not attributes-based) MQTT payload."""
+        topic = f"/control/{self._unit_uuid}/{self.device_uuid}/{service}"
+        payload = {
+            "command": {
+                "devices": {
+                    "deviceUUID": self.device_uuid,
+                    "handleName": self._handle_name,
+                    "services": {
+                        service: {
+                            "commands": {
+                                command_name: {
+                                    "parameters": parameters or {},
+                                    "instanceId": 0,
+                                }
+                            }
+                        }
+                    },
+                }
+            },
+            "deviceUUID": self.device_uuid,
+            "msgSequenceId": int(time.time() * 1000),
+            "srcDeviceId": self._client_id,
+            "timestamp": int(time.time() * 1000),
+        }
+        self._mqtt_client.publish(topic, json.dumps(payload))
 
     # ── Public control methods ───────────────────────────────────────
 

@@ -4,11 +4,13 @@ import logging
 import time
 
 import aiohttp
+import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers import entity_registry as er
+import homeassistant.helpers.config_validation as cv
 
 from .const import (
     APP_ID,
@@ -172,13 +174,18 @@ async def _fetch_device_state(hass, access_token, user_uuid, client_id, device_u
                                 vol = vol.get("value")
                             if vol is not None:
                                 camera_volume = int(vol)
-                        elif svc_name == "sdCardInfo":
-                            for key, api_key in [("total", "totalStorage"), ("available", "availableStorage"), ("status", "status")]:
+                        elif svc_name == "systemDiagnosis":
+                            for key, api_key in [("total", "totalExternalStorage"), ("available", "availableExternalStorage"), ("status", "SdCardAvailability")]:
                                 val = attrs.get(api_key)
                                 if isinstance(val, dict):
                                     val = val.get("value")
                                 if val is not None:
                                     camera_sd_info[key] = str(val)
+                            sd_status = attrs.get("sdCardStatus")
+                            if isinstance(sd_status, dict):
+                                sd_status = sd_status.get("value")
+                            if sd_status is not None:
+                                camera_sd_info["sdcard_status"] = str(sd_status)
                     op_state = shadow_dev.get("operationState", {})
                     hub_online = op_state.get("value") != "offline"
                     break
@@ -319,10 +326,67 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     ent_reg.async_remove(entity_id)
                     _LOGGER.info("Removed stale entity %s from camera device", entity_id)
 
+    # Register custom PTZ services
+    _register_ptz_services(hass, hass.data[DOMAIN][entry.entry_id]["hubs"])
+
     if all_platforms:
         await hass.config_entries.async_forward_entry_setups(entry, list(all_platforms))
 
     return True
+
+
+def _register_ptz_services(hass, hubs):
+    """Register Qubo PTZ start_pan/stop_pan services."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    async def _find_hub_by_device_id(device_id: str):
+        """Find hub by device UUID."""
+        for hub in hubs.values():
+            if hub.device_uuid == device_id:
+                return hub
+        raise ServiceValidationError(
+            f"Qubo device not found: {device_id}"
+        )
+
+    SERVICE_PTZ_START = "qubo_ptz_start_pan"
+    SERVICE_PTZ_STOP = "qubo_ptz_stop_pan"
+
+    # Only register once
+    if hass.services.has_service(DOMAIN, SERVICE_PTZ_START):
+        return
+
+    async def handle_ptz_start(call):
+        hub = await _find_hub_by_device_id(call.data["device_id"])
+        direction = call.data["direction"].upper()
+        if direction not in ("UP", "DOWN", "LEFT", "RIGHT"):
+            raise ServiceValidationError(
+                f"Invalid direction: {direction}. Use UP, DOWN, LEFT, or RIGHT."
+            )
+        await hub.camera_ptz_start_pan(direction)
+
+    async def handle_ptz_stop(call):
+        hub = await _find_hub_by_device_id(call.data["device_id"])
+        await hub.camera_ptz_stop_pan()
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PTZ_START,
+        handle_ptz_start,
+        schema=vol.Schema({
+            vol.Required("device_id"): cv.string,
+            vol.Required("direction"): vol.In(["UP", "DOWN", "LEFT", "RIGHT",
+                                                 "up", "down", "left", "right"]),
+        }),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PTZ_STOP,
+        handle_ptz_stop,
+        schema=vol.Schema({
+            vol.Required("device_id"): cv.string,
+        }),
+    )
+    _LOGGER.info("Qubo PTZ services registered: %s, %s", SERVICE_PTZ_START, SERVICE_PTZ_STOP)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

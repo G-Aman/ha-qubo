@@ -93,6 +93,10 @@ class QuboCamera(Camera):
         # Stream refresh timer
         self._unsub_stream_refresh = None
 
+        # Retry state
+        self._retry_count: int = 0
+        self._last_fetch_attempt: float = 0
+
     @property
     def device_info(self) -> dict:
         """Return device info."""
@@ -172,14 +176,23 @@ class QuboCamera(Camera):
                 )
             data = await response.json()
 
-        self._stream_url = data["streamURL"]
-        self._session_id = data["appSessionId"]
-        self._stream_expires_at = time.time() + 25 * 60  # 25 min TTL
+        stream_url = data.get("streamURL")
+        session_id = data.get("appSessionId")
+        if not stream_url:
+            raise RuntimeError(f"API response missing streamURL: {data}")
+
+        self._stream_url = stream_url
+        self._session_id = session_id
+        # Use API-provided TTL if available, fallback to 15 min
+        ttl_seconds = data.get("ttl", data.get("expiresIn", 900))
+        self._stream_expires_at = time.time() + ttl_seconds - 60  # 60s safety margin
+        self._retry_count = 0
 
         _LOGGER.warning(
-            "Qubo camera stream URL obtained: session=%s url=%s",
+            "Qubo camera stream URL obtained: session=%s url=%s ttl=%ss",
             self._session_id,
             self._stream_url,
+            ttl_seconds,
         )
         self.async_write_ha_state()
         return self._stream_url  # type: ignore[return-value]
@@ -238,11 +251,30 @@ class QuboCamera(Camera):
         if self._stream_url and time.time() < self._stream_expires_at:
             return self._stream_url
 
-        try:
-            return await self._async_get_stream_url()
-        except Exception as err:
-            _LOGGER.error("Failed to get Qubo camera stream: %s", err)
-            return None
+        # Rate-limit retries: max 1 attempt per 10 seconds
+        now = time.time()
+        if now - self._last_fetch_attempt < 10 and self._retry_count >= 2:
+            return self._stream_url  # Return stale URL as last resort (better than None)
+        self._last_fetch_attempt = now
+
+        # Try up to 2 times with brief delay
+        for attempt in range(2):
+            try:
+                url = await self._async_get_stream_url()
+                return url
+            except Exception as err:
+                self._retry_count += 1
+                _LOGGER.warning(
+                    "Stream URL fetch attempt %d failed: %s", attempt + 1, err
+                )
+                if attempt == 0:
+                    await asyncio.sleep(2)
+
+        # Both attempts failed — return stale URL if available
+        if self._stream_url:
+            _LOGGER.warning("Using stale stream URL after failed refresh")
+            return self._stream_url
+        return None
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
@@ -318,21 +350,34 @@ class QuboCamera(Camera):
         except Exception as err:
             _LOGGER.warning("Initial stream fetch failed (will retry on demand): %s", err)
 
-        # Refresh stream URL every 20 minutes (before 25-min TTL)
+        # Refresh stream URL every 10 minutes (before ~15-min TTL)
         self._unsub_stream_refresh = async_track_time_interval(
             self.hass,
             self._refresh_stream,
-            timedelta(minutes=20),
+            timedelta(minutes=10),
         )
 
     async def _refresh_stream(self, now=None) -> None:
-        """Periodically refresh the stream URL."""
+        """Periodically refresh the stream URL (non-destructive with rollback)."""
+        old_url = self._stream_url
+        old_session = self._session_id
+        old_expires = self._stream_expires_at
+
         try:
-            await self._async_stop_stream()
+            # Stop old session but keep the URL as fallback
+            try:
+                await self._async_stop_stream()
+            except Exception:
+                pass
+
             await self._async_get_stream_url()
             _LOGGER.debug("Qubo camera stream refreshed")
         except Exception as err:
             _LOGGER.warning("Failed to refresh Qubo camera stream: %s", err)
+            # Rollback so stream_source() can still return the old URL
+            self._stream_url = old_url
+            self._session_id = old_session
+            self._stream_expires_at = old_expires
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity is removed."""

@@ -1,0 +1,32 @@
+qubo_ptz_start_pan:
+  name: Start PTZ Pan
+  description: Start continuous PTZ camera movement in a direction.
+  fields:
+    device_id:
+      name: Device ID
+      description: Qubo device UUID
+      required: true
+      selector:
+        text:
+    direction:
+      name: Direction
+      description: Direction to pan (UP, DOWN, LEFT, RIGHT)
+      required: true
+      selector:
+        select:
+          options:
+            - "UP"
+            - "DOWN"
+            - "LEFT"
+            - "RIGHT"
+
+qubo_ptz_stop_pan:
+  name: Stop PTZ Pan
+  description: Stop continuous PTZ camera movement.
+  fields:
+    device_id:
+      name: Device ID
+      description: Qubo device UUID
+      required: true
+      selector:
+        text:
