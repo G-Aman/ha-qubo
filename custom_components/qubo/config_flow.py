@@ -167,7 +167,7 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         device_options = {}
         for dev in self._devices:
             name = dev.get("deviceName", dev.get("deviceUUID", "Unknown"))
-            model = dev.get("deviceModelCode", "")
+            model = dev.get("deviceType", "")
             label = f"{name} ({model})" if model else name
             device_options[dev["deviceUUID"]] = label
 
@@ -194,7 +194,7 @@ class QuboConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "unit_uuid": device.get("unitUUID"),
                 "device_name": device.get("deviceName"),
                 "handle_name": device.get("handleName"),
-                "device_model": device.get("deviceModelCode", ""),
+                "device_model": device.get("deviceType", ""),
             },
         )
 

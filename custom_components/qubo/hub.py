@@ -139,14 +139,18 @@ class QuboHub:
     def _on_connect(self, client, userdata, flags, rc) -> None:
         """Handle MQTT connection."""
         if rc == 0:
+            unit = self._unit_uuid
+            dev = self.device_uuid
             topics = [
                 (self._topic_monitor_switch, 0),
+                # Common services for all device types
+                (f"/monitor/{unit}/{dev}/wifiSettings", 0),
+                (f"/monitor/{unit}/{dev}/upgradeAvailable", 0),
+                (f"/monitor/{unit}/{dev}/heartbeat", 0),
             ]
             if self.is_plug:
                 topics.append((self._topic_monitor_meter, 0))
             else:
-                unit = self._unit_uuid
-                dev = self.device_uuid
                 topics.extend([
                     (f"/monitor/{unit}/{dev}/colorModeControl", 0),
                     (f"/monitor/{unit}/{dev}/colorRGBControl", 0),
@@ -167,6 +171,13 @@ class QuboHub:
                 self._handle_switch_update(payload)
             elif self.is_plug and topic == self._topic_monitor_meter:
                 self._handle_metering_update(payload)
+            elif topic.endswith("/wifiSettings"):
+                self._handle_wifi_update(payload)
+            elif topic.endswith("/upgradeAvailable"):
+                self._handle_upgrade_update(payload)
+            elif topic.endswith("/heartbeat"):
+                self.online = True
+                self.hass.loop.call_soon_threadsafe(self._publish_update)
             elif not self.is_plug:
                 if topic.endswith("/colorModeControl"):
                     self._handle_color_mode_update(payload)
@@ -249,6 +260,42 @@ class QuboHub:
         )
         if "color" in warmth_data:
             self._parse_warmth(warmth_data["color"])
+            self.hass.loop.call_soon_threadsafe(self._publish_update)
+
+    def _handle_wifi_update(self, payload: dict) -> None:
+        """Parse wifiSettings from MQTT payload."""
+        wifi_data = (
+            payload.get("devices", {})
+            .get("services", {})
+            .get("wifiSettings", {})
+            .get("events", {})
+            .get("stateChanged", {})
+        )
+        if wifi_data:
+            if "ssid" in wifi_data:
+                self.wifi_info["ssid"] = wifi_data["ssid"]
+            if "ip" in wifi_data:
+                self.wifi_info["ip"] = wifi_data["ip"]
+            if "signalStrength" in wifi_data:
+                self.wifi_info["signal"] = wifi_data["signalStrength"]
+            _LOGGER.debug("WiFi updated: %s", self.wifi_info)
+            self.hass.loop.call_soon_threadsafe(self._publish_update)
+
+    def _handle_upgrade_update(self, payload: dict) -> None:
+        """Parse upgradeAvailable from MQTT payload."""
+        upgrade_data = (
+            payload.get("devices", {})
+            .get("services", {})
+            .get("upgradeAvailable", {})
+            .get("events", {})
+            .get("stateChanged", {})
+        )
+        if upgrade_data:
+            available = str(upgrade_data.get("available", "false")).lower()
+            self.firmware_update_available = available in ("true", "1", "yes")
+            _LOGGER.debug(
+                "Firmware update available: %s", self.firmware_update_available
+            )
             self.hass.loop.call_soon_threadsafe(self._publish_update)
 
     def _parse_rgb(self, color_str: str) -> None:

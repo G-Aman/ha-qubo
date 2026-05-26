@@ -113,6 +113,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Fetch initial state via sync API
     initial_state = False
+    firmware_version: str | None = None
     shadow_data: dict = {}
     try:
         sync_url = (
@@ -136,15 +137,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 sync_data = await sync_response.json()
                 for dev in sync_data.get("devices", []):
                     if dev.get("deviceUUID") == device_uuid:
-                        for svc in dev.get("services", []):
-                            svc_name = svc.get("service", "")
-                            attrs = svc.get("attributes", {})
-                            if svc_name == "lcSwitchControl":
-                                power = attrs.get("power", {})
-                                initial_state = (
-                                    power.get("value", "off") == "on"
-                                )
-                            shadow_data[svc_name] = attrs
+                        # Initial state from device-level "state" field
+                        initial_state = dev.get("state", 0) == 1
+
+                        # Collect available service names from nested structure
+                        model_key = dev.get("deviceType", "")
+                        model_devices = dev.get("devices", {}).get(model_key, [])
+                        for model_dev in model_devices:
+                            for svc in model_dev.get("services", []):
+                                svc_name = svc.get("service", "")
+                                shadow_data[svc_name] = True
+                        # Firmware version from device-level data
+                        firmware_version = dev.get("firmwareVersion")
+                        _LOGGER.info(
+                            "Qubo sync: device=%s, state=%s, firmware=%s, services=%s",
+                            dev.get("deviceName"),
+                            "on" if initial_state else "off",
+                            firmware_version,
+                            list(shadow_data.keys()),
+                        )
                         break
     except aiohttp.ClientError as err:
         _LOGGER.warning("Could not fetch initial state: %s", err)
@@ -166,9 +177,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device_model=device_model,
     )
 
-    # Apply initial shadow state for bulbs
-    if not hub.is_plug:
-        _apply_bulb_shadow(hub, shadow_data)
+    # Apply firmware version from sync
+    hub.firmware_version = firmware_version
+
+    # Online — sync succeeded, device is reachable
+    hub.online = True
 
     await hub.start()
 
@@ -185,24 +198,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
     return True
-
-
-def _apply_bulb_shadow(hub: QuboHub, shadow_data: dict) -> None:
-    """Apply device shadow data to hub for bulb initial state."""
-    # Color mode
-    mode_data = shadow_data.get("colorModeControl", {})
-    mode_val = mode_data.get("mode", {})
-    hub.color_mode_str = mode_val.get("value", "cw")
-
-    # RGB color
-    rgb_data = shadow_data.get("colorRGBControl", {})
-    rgb_color = rgb_data.get("color", {})
-    hub._parse_rgb(rgb_color.get("value", ""))
-
-    # Warmth/color temp
-    warmth_data = shadow_data.get("colorWarmthControl", {})
-    warmth_color = warmth_data.get("color", {})
-    hub._parse_warmth(warmth_color.get("value", ""))
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
