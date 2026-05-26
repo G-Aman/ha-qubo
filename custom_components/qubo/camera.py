@@ -176,7 +176,7 @@ class QuboCamera(Camera):
         self._session_id = data["appSessionId"]
         self._stream_expires_at = time.time() + 25 * 60  # 25 min TTL
 
-        _LOGGER.debug(
+        _LOGGER.warning(
             "Qubo camera stream URL obtained: session=%s url=%s",
             self._session_id,
             self._stream_url,
@@ -266,14 +266,27 @@ class QuboCamera(Camera):
                 "-i", stream_url,
                 "-frames:v", "1",
                 "-q:v", "2",
+                "-f", "image2",
                 "-",
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
-            if stdout:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
+            if proc.returncode != 0:
+                err_text = stderr.decode("utf-8", errors="replace")[-500:] if stderr else "no stderr"
+                _LOGGER.warning(
+                    "Snapshot ffmpeg failed (rc=%s): %s",
+                    proc.returncode,
+                    err_text,
+                )
+            if stdout and len(stdout) > 100:
                 self._last_snapshot = stdout
                 return stdout
+            else:
+                _LOGGER.warning(
+                    "Snapshot too small (%s bytes) — likely not a valid JPEG",
+                    len(stdout) if stdout else 0,
+                )
         except asyncio.TimeoutError:
             _LOGGER.warning("Snapshot timeout from Qubo camera")
         except FileNotFoundError:
@@ -303,7 +316,7 @@ class QuboCamera(Camera):
         try:
             await self._async_get_stream_url()
         except Exception as err:
-            _LOGGER.debug("Initial stream fetch failed (will retry on demand): %s", err)
+            _LOGGER.warning("Initial stream fetch failed (will retry on demand): %s", err)
 
         # Refresh stream URL every 20 minutes (before 25-min TTL)
         self._unsub_stream_refresh = async_track_time_interval(

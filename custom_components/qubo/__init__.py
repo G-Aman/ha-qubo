@@ -8,6 +8,7 @@ import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     APP_ID,
@@ -120,6 +121,11 @@ async def _fetch_device_state(hass, access_token, user_uuid, client_id, device_u
     initial_rgb_color = None
     initial_warmth_color = None
     hub_online = True
+    # Camera initial state
+    camera_night_mode = None
+    camera_motion_sensitivity = None
+    camera_volume = None
+    camera_sd_info: dict[str, str | None] = {}
 
     try:
         async with session.post(
@@ -150,6 +156,29 @@ async def _fetch_device_state(hass, access_token, user_uuid, client_id, device_u
                             initial_rgb_color = (attrs.get("color") or {}).get("value")
                         elif svc_name == "colorWarmthControl":
                             initial_warmth_color = (attrs.get("color") or {}).get("value")
+                        elif svc_name == "nightModeControl":
+                            camera_night_mode = attrs.get("nightModeView") or attrs.get("nightMode")
+                            if isinstance(camera_night_mode, dict):
+                                camera_night_mode = camera_night_mode.get("value")
+                        elif svc_name == "recordingConfig":
+                            sens = attrs.get("motionSensitivity")
+                            if isinstance(sens, dict):
+                                sens = sens.get("value")
+                            if sens:
+                                camera_motion_sensitivity = sens
+                        elif svc_name == "volumeControl":
+                            vol = attrs.get("level")
+                            if isinstance(vol, dict):
+                                vol = vol.get("value")
+                            if vol is not None:
+                                camera_volume = int(vol)
+                        elif svc_name == "sdCardInfo":
+                            for key, api_key in [("total", "totalStorage"), ("available", "availableStorage"), ("status", "status")]:
+                                val = attrs.get(api_key)
+                                if isinstance(val, dict):
+                                    val = val.get("value")
+                                if val is not None:
+                                    camera_sd_info[key] = str(val)
                     op_state = shadow_dev.get("operationState", {})
                     hub_online = op_state.get("value") != "offline"
                     break
@@ -164,6 +193,10 @@ async def _fetch_device_state(hass, access_token, user_uuid, client_id, device_u
         "initial_rgb_color": initial_rgb_color,
         "initial_warmth_color": initial_warmth_color,
         "hub_online": hub_online,
+        "camera_night_mode": camera_night_mode,
+        "camera_motion_sensitivity": camera_motion_sensitivity,
+        "camera_volume": camera_volume,
+        "camera_sd_info": camera_sd_info,
     }
 
 
@@ -248,6 +281,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if state_info["initial_warmth_color"]:
             hub._parse_warmth(state_info["initial_warmth_color"])
 
+        # Apply camera initial state from sync
+        if hub.is_camera:
+            if state_info["camera_night_mode"] is not None:
+                hub.camera_night_mode = state_info["camera_night_mode"]
+            if state_info["camera_motion_sensitivity"] is not None:
+                hub.camera_motion_sensitivity = state_info["camera_motion_sensitivity"]
+            if state_info["camera_volume"] is not None:
+                hub.camera_volume = state_info["camera_volume"]
+            if state_info["camera_sd_info"]:
+                hub.camera_sd_info.update(state_info["camera_sd_info"])
+
         await hub.start()
 
         hass.data[DOMAIN][entry.entry_id]["hubs"][device_uuid] = hub
@@ -258,6 +302,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             device_name, device_model, platforms,
         )
         all_platforms.update(platforms)
+
+    # Clean up stale entities from wrong device types
+    ent_reg = er.async_get(hass)
+    for hub in hass.data[DOMAIN][entry.entry_id]["hubs"].values():
+        if hub.is_camera:
+            # Remove bulb-only entities that were incorrectly registered to camera
+            for suffix in ("timer", "color_mode"):
+                unique_id = f"{hub.device_uuid}_{suffix}"
+                entity_id = ent_reg.async_get_entity_id(
+                    "number" if suffix == "timer" else "select",
+                    DOMAIN,
+                    unique_id,
+                )
+                if entity_id:
+                    ent_reg.async_remove(entity_id)
+                    _LOGGER.info("Removed stale entity %s from camera device", entity_id)
 
     if all_platforms:
         await hass.config_entries.async_forward_entry_setups(entry, list(all_platforms))
