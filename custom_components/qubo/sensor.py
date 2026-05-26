@@ -189,8 +189,25 @@ class QuboCameraSDSensor(SensorEntity):
 
     @property
     def native_value(self):
-        """Return the SD card info value."""
-        return self._hub.camera_sd_info.get(self._info_key)
+        """Return the SD card info value, formatted for storage keys."""
+        raw = self._hub.camera_sd_info.get(self._info_key)
+        if raw is None or self._info_key not in ("total", "available"):
+            return raw
+        try:
+            val = float(raw)
+        except (ValueError, TypeError):
+            return raw
+        # Heuristic: values > 1M are bytes, > 1K are MB, else GB
+        if val > 1_000_000:
+            gb = val / (1024 ** 3)
+        elif val > 1_000:
+            gb = val / 1024
+        else:
+            gb = val
+        if gb >= 1:
+            return f"{gb:.1f} GB"
+        mb = gb * 1024
+        return f"{mb:.0f} MB"
 
     async def async_added_to_hass(self) -> None:
         """Register callback."""

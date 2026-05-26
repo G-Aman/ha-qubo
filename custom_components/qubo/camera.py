@@ -87,9 +87,7 @@ class QuboCamera(Camera):
         self._attr_frontend_stream_type = StreamType.HLS
         self._attr_supported_features = CameraEntityFeature.STREAM
 
-        # Snapshot cache
-        self._last_snapshot: bytes | None = None
-
+        # Snapshot cache (unused — HA stream integration handles snapshots)
         # Stream refresh timer
         self._unsub_stream_refresh = None
 
@@ -276,60 +274,10 @@ class QuboCamera(Camera):
             return self._stream_url
         return None
 
-    async def async_camera_image(
-        self, width: int | None = None, height: int | None = None
-    ) -> bytes | None:
-        """Return a camera image (snapshot).
-
-        Uses ffmpeg to grab a single frame from the RTSPS stream.
-        Falls back to cached snapshot if ffmpeg is unavailable.
-        """
-        stream_url = await self.stream_source()
-        if not stream_url:
-            return self._last_snapshot
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "ffmpeg",
-                "-y",
-                "-rtsp_transport", "tcp",
-                "-analyzeduration", "3000000",
-                "-probesize", "1000000",
-                "-i", stream_url,
-                "-frames:v", "1",
-                "-q:v", "2",
-                "-f", "image2",
-                "-",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
-            if proc.returncode != 0:
-                err_text = stderr.decode("utf-8", errors="replace")[-500:] if stderr else "no stderr"
-                _LOGGER.warning(
-                    "Snapshot ffmpeg failed (rc=%s): %s",
-                    proc.returncode,
-                    err_text,
-                )
-            if stdout and len(stdout) > 100:
-                self._last_snapshot = stdout
-                return stdout
-            else:
-                _LOGGER.warning(
-                    "Snapshot too small (%s bytes) — likely not a valid JPEG",
-                    len(stdout) if stdout else 0,
-                )
-        except asyncio.TimeoutError:
-            _LOGGER.warning("Snapshot timeout from Qubo camera")
-        except FileNotFoundError:
-            _LOGGER.warning(
-                "ffmpeg not found - install it for camera snapshots. "
-                "HA stream integration still works for live view."
-            )
-        except Exception as err:
-            _LOGGER.error("Snapshot error: %s", err)
-
-        return self._last_snapshot
+    # async_camera_image is intentionally NOT overridden.
+    # HA's built-in stream integration (declared as a dependency) will
+    # extract snapshots from the RTSPS URL returned by stream_source().
+    # The previous manual ffmpeg approach produced corrupt 0.03kb files.
 
     async def async_turn_on(self) -> None:
         """Turn on the camera stream."""
