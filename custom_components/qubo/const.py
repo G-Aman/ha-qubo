@@ -14,7 +14,7 @@ DEVICE_TYPE_PLUG = "smartPlug10A"
 DEVICE_TYPE_BULBS = ("smartBulbWifi9W",)
 
 # Platform lists per device type
-PLATFORMS_BULB = ["light", "sensor", "binary_sensor", "button", "number", "select"]
+PLATFORMS_BULB = ["light", "sensor", "binary_sensor", "number", "select"]
 PLATFORMS_PLUG = ["switch", "sensor", "binary_sensor", "button"]
 
 # Qubo color temperature range: CT 0=warm, 100=cool
