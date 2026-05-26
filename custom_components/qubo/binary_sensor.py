@@ -16,11 +16,14 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> None:
     """Set up Qubo binary sensor entities."""
-    hub: QuboHub = hass.data[DOMAIN][entry.entry_id]["hub"]
-    async_add_entities([
-        QuboOnlineSensor(hub),
-        QuboFirmwareUpdateSensor(hub),
-    ])
+    hubs: dict[str, QuboHub] = hass.data[DOMAIN][entry.entry_id]["hubs"]
+    entities = []
+    for hub in hubs.values():
+        entities.extend([
+            QuboOnlineSensor(hub),
+            QuboFirmwareUpdateSensor(hub),
+        ])
+    async_add_entities(entities)
 
 
 class QuboOnlineSensor(BinarySensorEntity):
@@ -39,7 +42,7 @@ class QuboOnlineSensor(BinarySensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
-        model = "Smart Plug" if self._hub.is_plug else "Smart Bulb"
+        model = self._hub.device_model or ("Smart Plug" if self._hub.is_plug else "Smart Bulb")
         return DeviceInfo(
             identifiers={(DOMAIN, self._hub.device_uuid)},
             name=self._hub.device_name,
@@ -77,7 +80,7 @@ class QuboFirmwareUpdateSensor(BinarySensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
-        model = "Smart Plug" if self._hub.is_plug else "Smart Bulb"
+        model = self._hub.device_model or ("Smart Plug" if self._hub.is_plug else "Smart Bulb")
         return DeviceInfo(
             identifiers={(DOMAIN, self._hub.device_uuid)},
             name=self._hub.device_name,

@@ -12,6 +12,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .const import (
     APP_ID,
     BASE_URL,
+    CAMERA_MODELS,
     CONF_PASSWORD,
     CONF_USERNAME,
     DEVICE_ATTRIBUTE,
@@ -20,6 +21,7 @@ from .const import (
     DOMAIN,
     LOGIN_DEVICE_NAME,
     PLATFORMS_BULB,
+    PLATFORMS_CAMERA,
     PLATFORMS_PLUG,
 )
 from .hub import QuboHub
@@ -35,33 +37,29 @@ def _get_device_platforms(device_model: str, device_name: str = "") -> list[str]
     if device_model in DEVICE_TYPE_BULBS:
         return PLATFORMS_BULB
 
+    # Camera models from decompiled APK
+    if device_model in CAMERA_MODELS:
+        return PLATFORMS_CAMERA
+
     # Keyword fallback when model code is missing/unknown
     combined = (device_model + device_name).lower()
     if any(kw in combined for kw in ("plug", "socket", "smartplug")):
         return PLATFORMS_PLUG
     if any(kw in combined for kw in ("bulb", "light", "lamp", "hlb")):
         return PLATFORMS_BULB
+    if any(kw in combined for kw in ("camera", "doorbell", "cam", "ptz")):
+        return PLATFORMS_CAMERA
 
-    # Camera or unknown - no platforms, log warning
-    if "camera" in combined:
-        _LOGGER.warning(
-            "Qubo camera devices are not yet supported: %s", device_model
-        )
-        return []
+    # Unknown - no platforms, log warning
     _LOGGER.warning(
         "Unknown Qubo device model: %s (name: %s)", device_model, device_name
     )
     return []
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Qubo from a config entry."""
+async def _login_and_get_token(hass, username, password, client_id):
+    """Login to Qubo and return auth tokens."""
     session = async_get_clientsession(hass)
-    username = entry.data[CONF_USERNAME]
-    password = entry.data[CONF_PASSWORD]
-    client_id = entry.data["client_id"]
-
-    # Login
     login_url = (
         f"{BASE_URL}/sms/api/v4/sp/"
         f"d10e4bfb0153496e8e8bb955f7ebe413/user/login"
@@ -83,87 +81,59 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "Token-Type": "USER",
     }
 
-    try:
-        async with session.post(
-            login_url, json=payload, headers=headers, params={"system": "CS"}
-        ) as response:
-            if response.status >= 400:
-                _LOGGER.error("Qubo login failed: %s", response.status)
-                return False
-            data = await response.json()
-            access_token = data.get("accessToken")
-            refresh_token = data.get("refreshToken")
-            user_uuid = data.get("uuid")
-            expires_in = data.get("expires_in", 3600)
-            expires_at = time.time() + expires_in - 60
-    except aiohttp.ClientError as err:
-        _LOGGER.error("Failed to connect to Qubo: %s", err)
-        return False
-
-    # Device info from config entry
-    device_uuid = entry.data.get("device_uuid")
-    unit_uuid = entry.data.get("unit_uuid")
-    device_name = entry.data.get("device_name", "Qubo Device")
-    handle_name = entry.data.get("handle_name")
-    device_model = entry.data.get("device_model", "")
-
-    if not device_uuid or not unit_uuid:
-        _LOGGER.error("Missing device/unit UUID in config entry")
-        return False
-
-    # Fetch initial state via sync API
-    initial_state = False
-    firmware_version: str | None = None
-    shadow_data: dict = {}
-    wifi_info: dict[str, str | None] = {"ssid": None, "ip": None, "signal": None}
-    initial_color_mode: str | None = None
-    initial_rgb_color: str | None = None
-    initial_warmth_color: str | None = None
-    hub_online: bool = True
-    try:
-        sync_url = (
-            f"{BASE_URL}/unit-entity-management/api/v6/sp/"
-            f"d10e4bfb0153496e8e8bb955f7ebe413/units/sync"
-        )
-        sync_headers = {
-            "Host": "srvcapp.platform.quboworld.com",
-            "User-Agent": "libcurl-agent restclient-cpp/2:1:1",
-            "Accept": "*/*",
-            "Login-Device-Name": LOGIN_DEVICE_NAME,
-            "Source-Device-Id": client_id,
-            "Subscriber-Key": access_token,
-            "Token-Type": "USER",
-            "User-UUID": user_uuid,
+    async with session.post(
+        login_url, json=payload, headers=headers, params={"system": "CS"}
+    ) as response:
+        if response.status >= 400:
+            raise CannotConnect(f"Qubo login failed: {response.status}")
+        data = await response.json()
+        return {
+            "access_token": data.get("accessToken"),
+            "refresh_token": data.get("refreshToken"),
+            "user_uuid": data.get("uuid"),
+            "expires_at": time.time() + data.get("expires_in", 3600) - 60,
         }
+
+
+async def _fetch_device_state(hass, access_token, user_uuid, client_id, device_uuid):
+    """Fetch initial state for a single device from sync API."""
+    session = async_get_clientsession(hass)
+    sync_url = (
+        f"{BASE_URL}/unit-entity-management/api/v6/sp/"
+        f"d10e4bfb0153496e8e8bb955f7ebe413/units/sync"
+    )
+    sync_headers = {
+        "Host": "srvcapp.platform.quboworld.com",
+        "User-Agent": "libcurl-agent restclient-cpp/2:1:1",
+        "Accept": "*/*",
+        "Login-Device-Name": LOGIN_DEVICE_NAME,
+        "Source-Device-Id": client_id,
+        "Subscriber-Key": access_token,
+        "Token-Type": "USER",
+        "User-UUID": user_uuid,
+    }
+
+    initial_state = False
+    firmware_version = None
+    wifi_info = {"ssid": None, "ip": None, "signal": None}
+    initial_color_mode = None
+    initial_rgb_color = None
+    initial_warmth_color = None
+    hub_online = True
+
+    try:
         async with session.post(
             sync_url, headers=sync_headers, json={"syncType": 1}
         ) as sync_response:
             if sync_response.status < 400:
                 sync_data = await sync_response.json()
+
                 for dev in sync_data.get("devices", []):
                     if dev.get("deviceUUID") == device_uuid:
-                        # Initial state from device-level "state" field
                         initial_state = dev.get("state", 0) == 1
-
-                        # Collect available service names from nested structure
-                        model_key = dev.get("deviceType", "")
-                        model_devices = dev.get("devices", {}).get(model_key, [])
-                        for model_dev in model_devices:
-                            for svc in model_dev.get("services", []):
-                                svc_name = svc.get("service", "")
-                                shadow_data[svc_name] = True
-                        # Firmware version from device-level data
                         firmware_version = dev.get("firmwareVersion")
-                        _LOGGER.info(
-                            "Qubo sync: device=%s, state=%s, firmware=%s, services=%s",
-                            dev.get("deviceName"),
-                            "on" if initial_state else "off",
-                            firmware_version,
-                            list(shadow_data.keys()),
-                        )
                         break
 
-                # Parse deviceshadow for initial attribute values
                 for shadow_dev in sync_data.get("deviceshadow", []):
                     if shadow_dev.get("deviceUUID") != device_uuid:
                         continue
@@ -180,73 +150,136 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             initial_rgb_color = (attrs.get("color") or {}).get("value")
                         elif svc_name == "colorWarmthControl":
                             initial_warmth_color = (attrs.get("color") or {}).get("value")
-                    # Also check operationState for online/offline
                     op_state = shadow_dev.get("operationState", {})
-                    if op_state.get("value") == "offline":
-                        hub_online = False
-                    else:
-                        hub_online = True
+                    hub_online = op_state.get("value") != "offline"
                     break
     except aiohttp.ClientError as err:
-        _LOGGER.warning("Could not fetch initial state: %s", err)
-        hub_online = True
+        _LOGGER.warning("Could not fetch initial state for %s: %s", device_uuid, err)
 
-    # Create hub
-    hub = QuboHub(
-        hass=hass,
-        session=session,
-        access_token=access_token,
-        refresh_token=refresh_token,
-        user_uuid=user_uuid,
-        device_uuid=device_uuid,
-        unit_uuid=unit_uuid,
-        expires_at=expires_at,
-        initial_state=initial_state,
-        device_name=device_name,
-        handle_name=handle_name,
-        client_id=client_id,
-        device_model=device_model,
-    )
+    return {
+        "initial_state": initial_state,
+        "firmware_version": firmware_version,
+        "wifi_info": wifi_info,
+        "initial_color_mode": initial_color_mode,
+        "initial_rgb_color": initial_rgb_color,
+        "initial_warmth_color": initial_warmth_color,
+        "hub_online": hub_online,
+    }
 
-    # Apply firmware version and initial state from sync
-    hub.firmware_version = firmware_version
-    hub.online = hub_online
 
-    # Apply initial WiFi info from deviceshadow
-    if any(wifi_info.values()):
-        hub.wifi_info.update(wifi_info)
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up Qubo from a config entry."""
+    username = entry.data[CONF_USERNAME]
+    password = entry.data[CONF_PASSWORD]
+    client_id = entry.data["client_id"]
 
-    # Apply initial color state from deviceshadow (if available)
-    if initial_color_mode:
-        hub.color_mode_str = initial_color_mode
-    if initial_rgb_color:
-        hub._parse_rgb(initial_rgb_color)
-    if initial_warmth_color:
-        hub._parse_warmth(initial_warmth_color)
+    # Support both old format (single device) and new format (devices list)
+    if "devices" in entry.data:
+        devices = entry.data["devices"]
+    else:
+        # Legacy single-device entry
+        devices = [{
+            "device_uuid": entry.data.get("device_uuid"),
+            "unit_uuid": entry.data.get("unit_uuid"),
+            "device_name": entry.data.get("device_name", "Qubo Device"),
+            "handle_name": entry.data.get("handle_name"),
+            "device_model": entry.data.get("device_model", ""),
+        }]
 
-    await hub.start()
+    # Login once for all devices
+    try:
+        auth = await _login_and_get_token(hass, username, password, client_id)
+    except Exception as err:
+        _LOGGER.error("Failed to login to Qubo: %s", err)
+        return False
+
+    access_token = auth["access_token"]
+    refresh_token = auth["refresh_token"]
+    user_uuid = auth["user_uuid"]
+    expires_at = auth["expires_at"]
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {"hub": hub}
+    hass.data[DOMAIN][entry.entry_id] = {"hubs": {}}
 
-    # Determine platforms from device model (with keyword fallback)
-    platforms = _get_device_platforms(device_model, device_name)
-    _LOGGER.info(
-        "Qubo device model: %s, loading platforms: %s",
-        device_model, platforms,
-    )
-    if platforms:
-        await hass.config_entries.async_forward_entry_setups(entry, platforms)
+    all_platforms: set[str] = set()
+
+    for dev_info in devices:
+        device_uuid = dev_info.get("device_uuid")
+        unit_uuid = dev_info.get("unit_uuid")
+        device_name = dev_info.get("device_name", "Qubo Device")
+        handle_name = dev_info.get("handle_name")
+        device_model = dev_info.get("device_model", "")
+
+        if not device_uuid or not unit_uuid:
+            _LOGGER.warning("Skipping device with missing UUID: %s", dev_info)
+            continue
+
+        # Fetch initial state for this device
+        state_info = await _fetch_device_state(
+            hass, access_token, user_uuid, client_id, device_uuid
+        )
+
+        # Create hub for this device
+        hub = QuboHub(
+            hass=hass,
+            session=async_get_clientsession(hass),
+            access_token=access_token,
+            refresh_token=refresh_token,
+            user_uuid=user_uuid,
+            device_uuid=device_uuid,
+            unit_uuid=unit_uuid,
+            expires_at=expires_at,
+            initial_state=state_info["initial_state"],
+            device_name=device_name,
+            handle_name=handle_name or "",
+            client_id=client_id,
+            device_model=device_model,
+        )
+
+        hub.firmware_version = state_info["firmware_version"]
+        hub.online = state_info["hub_online"]
+
+        if any(state_info["wifi_info"].values()):
+            hub.wifi_info.update(state_info["wifi_info"])
+        if state_info["initial_color_mode"]:
+            hub.color_mode_str = state_info["initial_color_mode"]
+        if state_info["initial_rgb_color"]:
+            hub._parse_rgb(state_info["initial_rgb_color"])
+        if state_info["initial_warmth_color"]:
+            hub._parse_warmth(state_info["initial_warmth_color"])
+
+        await hub.start()
+
+        hass.data[DOMAIN][entry.entry_id]["hubs"][device_uuid] = hub
+
+        platforms = _get_device_platforms(device_model, device_name)
+        _LOGGER.info(
+            "Qubo: device '%s' model=%s, platforms=%s",
+            device_name, device_model, platforms,
+        )
+        all_platforms.update(platforms)
+
+    if all_platforms:
+        await hass.config_entries.async_forward_entry_setups(entry, list(all_platforms))
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    hub: QuboHub = hass.data[DOMAIN][entry.entry_id]["hub"]
-    await hub.stop()
-    platforms = _get_device_platforms(hub.device_model, hub.device_name)
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
+    hubs = hass.data[DOMAIN][entry.entry_id]["hubs"]
+
+    all_platforms: set[str] = set()
+    for hub in hubs.values():
+        await hub.stop()
+        platforms = _get_device_platforms(hub.device_model, hub.device_name)
+        all_platforms.update(platforms)
+
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, list(all_platforms))
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
+
+
+class CannotConnect(Exception):
+    """Error to indicate we cannot connect."""

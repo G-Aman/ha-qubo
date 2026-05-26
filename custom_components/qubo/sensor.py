@@ -24,32 +24,32 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> None:
     """Set up Qubo sensor entities."""
-    hub: QuboHub = hass.data[DOMAIN][entry.entry_id]["hub"]
+    hubs: dict[str, QuboHub] = hass.data[DOMAIN][entry.entry_id]["hubs"]
 
     entities = []
 
-    if hub.is_plug:
-        # Plug metering sensors
-        entities.extend([
-            QuboSensor(hub, "power", "Power", UnitOfPower.WATT,
-                       SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT),
-            QuboSensor(hub, "current", "Current", UnitOfElectricCurrent.AMPERE,
-                       SensorDeviceClass.CURRENT, SensorStateClass.MEASUREMENT),
-            QuboSensor(hub, "voltage", "Voltage", UnitOfElectricPotential.VOLT,
-                       SensorDeviceClass.VOLTAGE, SensorStateClass.MEASUREMENT),
-            QuboSensor(hub, "consumption", "Energy", UnitOfEnergy.KILO_WATT_HOUR,
-                       SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING),
-            QuboSensor(hub, "duration", "On Duration", UnitOfTime.SECONDS,
-                       SensorDeviceClass.DURATION, SensorStateClass.MEASUREMENT),
-        ])
+    for hub in hubs.values():
+        if hub.is_plug:
+            entities.extend([
+                QuboSensor(hub, "power", "Power", UnitOfPower.WATT,
+                           SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT),
+                QuboSensor(hub, "current", "Current", UnitOfElectricCurrent.AMPERE,
+                           SensorDeviceClass.CURRENT, SensorStateClass.MEASUREMENT),
+                QuboSensor(hub, "voltage", "Voltage", UnitOfElectricPotential.VOLT,
+                           SensorDeviceClass.VOLTAGE, SensorStateClass.MEASUREMENT),
+                QuboSensor(hub, "consumption", "Energy", UnitOfEnergy.KILO_WATT_HOUR,
+                           SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING),
+                QuboSensor(hub, "duration", "On Duration", UnitOfTime.SECONDS,
+                           SensorDeviceClass.DURATION, SensorStateClass.MEASUREMENT),
+            ])
 
-    # WiFi info sensors (all device types)
-    entities.extend([
-        QuboWiFiSensor(hub, "ssid", "WiFi SSID", "mdi:wifi"),
-        QuboWiFiSensor(hub, "ip", "IP Address", "mdi:ip-network"),
-        QuboWiFiSensor(hub, "signal", "WiFi Signal", "mdi:wifi-strength-2",
-                       SensorDeviceClass.SIGNAL_STRENGTH),
-    ])
+        # WiFi info sensors (all device types)
+        entities.extend([
+            QuboWiFiSensor(hub, "ssid", "WiFi SSID", "mdi:wifi"),
+            QuboWiFiSensor(hub, "ip", "IP Address", "mdi:ip-network"),
+            QuboWiFiSensor(hub, "signal", "WiFi Signal", "mdi:wifi-strength-2",
+                           SensorDeviceClass.SIGNAL_STRENGTH),
+        ])
 
     async_add_entities(entities)
 
@@ -128,7 +128,7 @@ class QuboWiFiSensor(SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
-        model = "Smart Plug" if self._hub.is_plug else "Smart Bulb"
+        model = self._hub.device_model or ("Smart Plug" if self._hub.is_plug else "Smart Bulb")
         return DeviceInfo(
             identifiers={(DOMAIN, self._hub.device_uuid)},
             name=self._hub.device_name,

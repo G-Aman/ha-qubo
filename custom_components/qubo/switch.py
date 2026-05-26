@@ -13,9 +13,10 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> None:
     """Set up the Qubo switch platform from a config entry."""
-    hub: QuboHub = hass.data[DOMAIN][entry.entry_id]["hub"]
-    if hub.is_plug:
-        async_add_entities([QuboSwitch(hub)])
+    hubs: dict[str, QuboHub] = hass.data[DOMAIN][entry.entry_id]["hubs"]
+    async_add_entities([
+        QuboSwitch(hub) for hub in hubs.values() if hub.is_plug
+    ])
 
 
 class QuboSwitch(SwitchEntity):

@@ -8,14 +8,35 @@ BASE_URL = "https://srvcapp.platform.quboworld.com"
 LOGIN_DEVICE_NAME = "HA-Qubo-Integration"
 DEVICE_ATTRIBUTE = "HomeAssistant|Server|Integration"
 APP_ID = "934488E68332E88B1E0F9AF552840184955629777525A195949C0BE97DEF6455"
+SP_ID = "d10e4bfb0153496e8e8bb955f7ebe413"
 
 # Device model codes
 DEVICE_TYPE_PLUG = "smartPlug10A"
 DEVICE_TYPE_BULBS = ("smartBulbWifi9W",)
 
+# Camera device models (from decompiled APK)
+CAMERA_MODELS = (
+    "multipurposeCamera",
+    "babyMonitoringCamera",
+    "outdoorCamera",
+    "bulletOutdoorCamera",
+    "ptzCamera",
+    "videoDoorbell",
+    "ptze2kCamera",
+    "ptzCamera3MP",
+    "cam3602K3MP14",
+    "ptzCameraQ1003MP",
+    "ptzeCamera",
+    "bulletcam2K4MP",
+    "bulletcamPan2K4MP",
+    "cam3602K4MP",
+    "outdoorCam3602K4MP",
+)
+
 # Platform lists per device type
 PLATFORMS_BULB = ["light", "sensor", "binary_sensor", "number", "select"]
 PLATFORMS_PLUG = ["switch", "sensor", "binary_sensor", "button"]
+PLATFORMS_CAMERA = ["camera", "sensor", "binary_sensor"]
 
 # Qubo color temperature range: CT 0=warm, 100=cool
 # Mapped to HA kelvin: 0→2000K, 100→6535K

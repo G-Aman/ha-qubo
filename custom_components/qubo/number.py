@@ -14,9 +14,10 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> None:
     """Set up Qubo number entities."""
-    hub: QuboHub = hass.data[DOMAIN][entry.entry_id]["hub"]
-    if not hub.is_plug:
-        async_add_entities([QuboTimerNumber(hub)])
+    hubs: dict[str, QuboHub] = hass.data[DOMAIN][entry.entry_id]["hubs"]
+    async_add_entities([
+        QuboTimerNumber(hub) for hub in hubs.values() if not hub.is_plug
+    ])
 
 
 class QuboTimerNumber(NumberEntity):

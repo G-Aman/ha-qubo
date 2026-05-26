@@ -5,12 +5,12 @@
     "@G-Aman"
   ],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": ["stream"],
   "documentation": "https://github.com/G-Aman/ha-qubo/blob/main/README.md",
   "iot_class": "cloud_push",
   "issue_tracker": "https://github.com/G-Aman/ha-qubo/issues",
   "requirements": [
     "paho-mqtt>=1.6.1"
   ],
-  "version": "0.5.1"
+  "version": "0.6.0"
 }

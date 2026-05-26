@@ -13,11 +13,10 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> None:
     """Set up Qubo button entities."""
-    hub: QuboHub = hass.data[DOMAIN][entry.entry_id]["hub"]
-
-    if hub.is_plug:
-        async_add_entities([QuboRefreshMeteringButton(hub)])
-    # Bulb: no buttons needed — colors/effects are in the light entity
+    hubs: dict[str, QuboHub] = hass.data[DOMAIN][entry.entry_id]["hubs"]
+    async_add_entities([
+        QuboRefreshMeteringButton(hub) for hub in hubs.values() if hub.is_plug
+    ])
 
 
 class QuboRefreshMeteringButton(ButtonEntity):

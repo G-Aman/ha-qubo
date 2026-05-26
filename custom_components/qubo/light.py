@@ -32,9 +32,10 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> None:
     """Set up the Qubo light platform."""
-    hub: QuboHub = hass.data[DOMAIN][entry.entry_id]["hub"]
-    if not hub.is_plug:
-        async_add_entities([QuboLight(hub)])
+    hubs: dict[str, QuboHub] = hass.data[DOMAIN][entry.entry_id]["hubs"]
+    async_add_entities([
+        QuboLight(hub) for hub in hubs.values() if not hub.is_plug
+    ])
 
 
 class QuboLight(LightEntity):
