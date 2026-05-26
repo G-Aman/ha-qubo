@@ -316,7 +316,7 @@ class QuboHub:
             return
         parts = color_str.split(",")
         if len(parts) >= 8:
-            brightness_pct = int(parts[6])
+            brightness_pct = int(float(parts[6]))
             self.brightness = int(brightness_pct * 2.55)
             ct = int(parts[5])
             self.color_temp_kelvin = _qubo_ct_to_kelvin(ct)
