@@ -17,7 +17,7 @@ async def async_setup_entry(
     """Set up Qubo select entities."""
     hubs: dict[str, QuboHub] = hass.data[DOMAIN][entry.entry_id]["hubs"]
     async_add_entities([
-        QuboColorModeSelect(hub) for hub in hubs.values() if not hub.is_plug and not hub.is_camera
+        QuboColorModeSelect(hub) for hub in hubs.values() if hub.is_bulb
     ])
 
 

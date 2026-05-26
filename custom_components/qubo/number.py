@@ -16,7 +16,7 @@ async def async_setup_entry(
     """Set up Qubo number entities."""
     hubs: dict[str, QuboHub] = hass.data[DOMAIN][entry.entry_id]["hubs"]
     async_add_entities([
-        QuboTimerNumber(hub) for hub in hubs.values() if not hub.is_plug and not hub.is_camera
+        QuboTimerNumber(hub) for hub in hubs.values() if hub.is_bulb
     ])
 
 

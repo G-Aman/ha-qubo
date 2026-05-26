@@ -14,6 +14,8 @@ from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
     BASE_URL,
+    CAMERA_MODELS,
+    DEVICE_TYPE_BULBS,
     DEVICE_TYPE_PLUG,
     LOGIN_DEVICE_NAME,
     MQTT_HOST,
@@ -69,11 +71,20 @@ class QuboHub:
         )
 
         # Detect camera
-        from .const import CAMERA_MODELS
         combined = (device_model + device_name).lower()
         self.is_camera = (
             device_model in CAMERA_MODELS
             or any(kw in combined for kw in ("camera", "doorbell", "cam", "ptz"))
+        )
+
+        # Detect bulb: exact model match OR keyword (only if not camera)
+        self.is_bulb = (
+            not self.is_plug
+            and not self.is_camera
+            and (
+                device_model in DEVICE_TYPE_BULBS
+                or any(kw in combined for kw in ("bulb", "light", "lamp", "hlb"))
+            )
         )
 
         # Bulb state

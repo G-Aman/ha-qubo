@@ -34,7 +34,7 @@ async def async_setup_entry(
     """Set up the Qubo light platform."""
     hubs: dict[str, QuboHub] = hass.data[DOMAIN][entry.entry_id]["hubs"]
     async_add_entities([
-        QuboLight(hub) for hub in hubs.values() if not hub.is_plug and not hub.is_camera
+        QuboLight(hub) for hub in hubs.values() if hub.is_bulb
     ])
 
 
