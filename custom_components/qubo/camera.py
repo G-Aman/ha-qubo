@@ -5,8 +5,7 @@ import logging
 import time
 from datetime import timedelta
 
-from homeassistant.components.camera import Camera, CameraEntityFeature
-from homeassistant.components.stream import StreamType
+from homeassistant.components.camera import Camera, CameraEntityFeature, StreamType
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
