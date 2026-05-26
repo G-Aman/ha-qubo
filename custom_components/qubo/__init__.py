@@ -115,6 +115,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     initial_state = False
     firmware_version: str | None = None
     shadow_data: dict = {}
+    wifi_info: dict[str, str | None] = {"ssid": None, "ip": None, "signal": None}
+    initial_color_mode: str | None = None
+    initial_rgb_color: str | None = None
+    initial_warmth_color: str | None = None
+    hub_online: bool = True
     try:
         sync_url = (
             f"{BASE_URL}/unit-entity-management/api/v6/sp/"
@@ -157,8 +162,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             list(shadow_data.keys()),
                         )
                         break
+
+                # Parse deviceshadow for initial attribute values
+                for shadow_dev in sync_data.get("deviceshadow", []):
+                    if shadow_dev.get("deviceUUID") != device_uuid:
+                        continue
+                    for svc in shadow_dev.get("services", []):
+                        svc_name = svc.get("service", "")
+                        attrs = svc.get("attributes", {})
+                        if svc_name == "wifiSettings":
+                            wifi_info["ssid"] = (attrs.get("SSIDName") or {}).get("value")
+                            wifi_info["ip"] = (attrs.get("ipAddress") or {}).get("value")
+                            wifi_info["signal"] = (attrs.get("signalStrength") or {}).get("value")
+                        elif svc_name == "colorModeControl":
+                            initial_color_mode = (attrs.get("mode") or {}).get("value")
+                        elif svc_name == "colorRGBControl":
+                            initial_rgb_color = (attrs.get("color") or {}).get("value")
+                        elif svc_name == "colorWarmthControl":
+                            initial_warmth_color = (attrs.get("color") or {}).get("value")
+                    # Also check operationState for online/offline
+                    op_state = shadow_dev.get("operationState", {})
+                    if op_state.get("value") == "offline":
+                        hub_online = False
+                    else:
+                        hub_online = True
+                    break
     except aiohttp.ClientError as err:
         _LOGGER.warning("Could not fetch initial state: %s", err)
+        hub_online = True
 
     # Create hub
     hub = QuboHub(
@@ -177,11 +208,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device_model=device_model,
     )
 
-    # Apply firmware version from sync
+    # Apply firmware version and initial state from sync
     hub.firmware_version = firmware_version
+    hub.online = hub_online
 
-    # Online — sync succeeded, device is reachable
-    hub.online = True
+    # Apply initial WiFi info from deviceshadow
+    if any(wifi_info.values()):
+        hub.wifi_info.update(wifi_info)
+
+    # Apply initial color state from deviceshadow (if available)
+    if initial_color_mode:
+        hub.color_mode_str = initial_color_mode
+    if initial_rgb_color:
+        hub._parse_rgb(initial_rgb_color)
+    if initial_warmth_color:
+        hub._parse_warmth(initial_warmth_color)
 
     await hub.start()
 
