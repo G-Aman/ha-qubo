@@ -68,6 +68,14 @@ class QuboHub:
             )
         )
 
+        # Detect camera
+        from .const import CAMERA_MODELS
+        combined = (device_model + device_name).lower()
+        self.is_camera = (
+            device_model in CAMERA_MODELS
+            or any(kw in combined for kw in ("camera", "doorbell", "cam", "ptz"))
+        )
+
         # Bulb state
         self.color_mode_str: str = "cw"
         self.brightness: int | None = None

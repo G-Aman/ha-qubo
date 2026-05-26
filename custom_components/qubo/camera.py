@@ -47,7 +47,7 @@ async def async_setup_entry(
     cameras = []
 
     for device_uuid, hub in hubs.items():
-        if is_camera_device(hub.device_model, hub.device_name):
+        if hub.is_camera:
             cameras.append(
                 QuboCamera(
                     hass=hass,
