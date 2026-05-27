@@ -25,7 +25,7 @@ async def async_setup_entry(
                 QuboCameraSwitch(hub, "continuous_recording", "Continuous Recording",
                                  "continuousRecording", "mdi:record-rec"),
                 QuboCameraSwitch(hub, "image_analytics", "AI Detection",
-                                 "imageAnalytics", "mdi:brain"),
+                                 "aisetting", "mdi:brain"),
                 QuboCameraSwitch(hub, "cloud_dvr", "Cloud DVR",
                                  "cloudDvr", "mdi:cloud-upload"),
             ])

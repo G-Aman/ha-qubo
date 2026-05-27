@@ -159,7 +159,7 @@ async def _fetch_device_state(hass, access_token, user_uuid, client_id, device_u
                         elif svc_name == "colorWarmthControl":
                             initial_warmth_color = (attrs.get("color") or {}).get("value")
                         elif svc_name == "nightModeControl":
-                            camera_night_mode = attrs.get("nightModeView") or attrs.get("nightMode")
+                            camera_night_mode = attrs.get("mpc_nightMode") or attrs.get("nightModeView") or attrs.get("nightMode")
                             if isinstance(camera_night_mode, dict):
                                 camera_night_mode = camera_night_mode.get("value")
                         elif svc_name == "recordingConfig":

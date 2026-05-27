@@ -194,7 +194,7 @@ class QuboHub:
                 topics.extend([
                     (f"/monitor/{unit}/{dev}/motionTracking", 0),
                     (f"/monitor/{unit}/{dev}/continuousRecording", 0),
-                    (f"/monitor/{unit}/{dev}/imageAnalytics", 0),
+                    (f"/monitor/{unit}/{dev}/aisetting", 0),
                     (f"/monitor/{unit}/{dev}/nightModeControl", 0),
                     (f"/monitor/{unit}/{dev}/recordingConfig", 0),
                     (f"/monitor/{unit}/{dev}/volumeControl", 0),
@@ -390,10 +390,10 @@ class QuboHub:
             self.camera_motion_tracking = str(state.get("enabled", "")).lower() == "true"
         elif svc_name == "continuousRecording":
             self.camera_continuous_recording = str(state.get("enabled", "")).lower() == "true"
-        elif svc_name == "imageAnalytics":
+        elif svc_name == "aisetting":
             self.camera_image_analytics = str(state.get("state", "")).lower() == "enable"
         elif svc_name == "nightModeControl":
-            self.camera_night_mode = state.get("nightModeView", state.get("nightMode", self.camera_night_mode))
+            self.camera_night_mode = state.get("mpc_nightMode", state.get("nightModeView", state.get("nightMode", self.camera_night_mode)))
         elif svc_name == "recordingConfig":
             self.camera_motion_sensitivity = state.get("motionSensitivity", self.camera_motion_sensitivity)
         elif svc_name == "volumeControl":
@@ -433,12 +433,12 @@ class QuboHub:
     async def camera_set_image_analytics(self, enabled: bool) -> None:
         """Enable/disable AI image analytics."""
         await self._async_refresh_token_if_needed()
-        self._publish_service("imageAnalytics", {"state": "enable" if enabled else "disable"})
+        self._publish_service("aisetting", {"state": "enable" if enabled else "disable"})
 
     async def camera_set_night_mode(self, mode: str) -> None:
         """Set night mode: 'auto', 'on', 'off'."""
         await self._async_refresh_token_if_needed()
-        self._publish_service("nightModeControl", {"nightModeView": mode})
+        self._publish_service("nightModeControl", {"mpc_nightMode": mode})
 
     async def camera_set_motion_sensitivity(self, level: str) -> None:
         """Set motion sensitivity: HIGH_SENSITIVITY, MEDIUM_SENSITIVITY, LOW_SENSITIVITY."""
@@ -473,7 +473,7 @@ class QuboHub:
     async def camera_reboot(self) -> None:
         """Reboot the camera."""
         await self._async_refresh_token_if_needed()
-        self._publish_service("deviceReboot", {"reboot": "true"})
+        self._publish_service("deviceReboot", {"commands": "reboot"})
 
     async def _send_sdcard_refresh(self, now=None) -> None:
         """Request SD card storage status from a camera (systemDiagnosis)."""
